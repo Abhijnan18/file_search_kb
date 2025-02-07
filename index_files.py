@@ -3,48 +3,43 @@ import os
 import sys
 from whoosh.index import create_in
 from whoosh.fields import Schema, TEXT, ID
-
-# For PDF extraction
 from pdfminer.high_level import extract_text
-
-# For DOCX extraction
 import docx
+from whoosh.analysis import RegexTokenizer, LowercaseFilter
 
+# Define a custom analyzer for file names (splits on underscores)
+file_name_analyzer = RegexTokenizer(r"[A-Za-z0-9]+") | LowercaseFilter()
 
-def get_docx_text(path):
-    """Extract text from a DOCX file."""
-    try:
-        doc = docx.Document(path)
-        fullText = []
-        for para in doc.paragraphs:
-            fullText.append(para.text)
-        return "\n".join(fullText)
-    except Exception as e:
-        print(f"Error reading DOCX {path}: {e}")
-        return ""
+# Define the Whoosh schema with the custom analyzer for file_name
+schema = Schema(
+    file_path=ID(stored=True, unique=True),
+    file_name=TEXT(stored=True, analyzer=file_name_analyzer),
+    content=TEXT
+)
 
-
-# --- Configuration ---
-# Prompt for the directory to index. For safety, consider using a specific folder (e.g., Documents).
+# Prompt for the directory to index
 ROOT_DIR = '/Users/abhijnans/Documents/Knolwdge base Test'
 if not os.path.isdir(ROOT_DIR):
     print("The provided path is not a valid directory.")
     sys.exit(1)
 
-# Define the Whoosh schema
-schema = Schema(
-    file_path=ID(stored=True, unique=True),
-    file_name=TEXT(stored=True),
-    content=TEXT
-)
-
-# Create (or reuse) the index directory.
+# Create the index directory if it doesn't exist
 index_dir = "indexdir"
 if not os.path.exists(index_dir):
     os.mkdir(index_dir)
 
 ix = create_in(index_dir, schema)
 writer = ix.writer()
+
+
+def get_docx_text(path):
+    try:
+        doc = docx.Document(path)
+        return "\n".join([para.text for para in doc.paragraphs])
+    except Exception as e:
+        print(f"Error reading DOCX {path}: {e}")
+        return ""
+
 
 # Walk through the directory tree.
 for dirpath, dirnames, filenames in os.walk(ROOT_DIR):
@@ -53,38 +48,31 @@ for dirpath, dirnames, filenames in os.walk(ROOT_DIR):
         content = ""
         ext = os.path.splitext(filename)[1].lower()
 
-        # Handle PDF files
         if ext == ".pdf":
             try:
                 content = extract_text(file_path)
             except Exception as e:
-                print(
-                    f"Skipping PDF file (error extracting text): {file_path} - {e}")
+                print(f"Skipping PDF file: {file_path} - {e}")
                 continue
-
-        # Handle DOCX files
         elif ext == ".docx":
             content = get_docx_text(file_path)
             if not content:
                 print(f"Skipping DOCX file (no content): {file_path}")
                 continue
-
-        # Handle plain text files or others (try opening as UTF-8 text)
         else:
             try:
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
             except Exception as e:
-                print(
-                    f"Skipping file (cannot read as text): {file_path} - {e}")
+                print(f"Skipping file: {file_path} - {e}")
                 continue
 
-        # Optional: Skip very large files (e.g., > 10MB)
+        # Skip very large files
         if len(content) > 10 * 1024 * 1024:
             print(f"Skipping large file: {file_path}")
             continue
 
-        # Add the document to the index if there is any content.
+        # Add document to index if content is non-empty
         if content.strip():
             writer.add_document(file_path=file_path,
                                 file_name=filename, content=content)
